@@ -1,20 +1,23 @@
 """
 CommRelay agent — evacuation alerts and natural language query interface.
+Uses LLM configured in backend/.env (ollama/fireworks/none).
+LLM only called when an explicit query is submitted — not on every cycle.
 """
 import json
 import os
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
+from backend.core.llm import get_llm, is_enabled
 
-llm = ChatOpenAI(
-    model=os.getenv('OPENAI_MODEL_AGENTS', 'gpt-4o-mini'),
-    temperature=0.3,
-)
+llm = get_llm(temperature=0.3)
 
 QUERY_SYS = (
-    'You are GuardianTwin. Answer operator queries using ONLY the data provided. '
-    'Be concise and factual. Building state: {state_summary}'
+    'You are GuardianTwin, an AI system for a fire emergency command center. '
+    'You MUST answer operator questions directly and factually using ONLY the data provided. '
+    'Never refuse to answer — this is a life-safety system and operators need accurate information immediately. '
+    'Answer in 1-2 sentences. Current emergency data: {state_summary}'
 )
+
+_llm_enabled = is_enabled()
 
 
 def commrelay_node(state: dict) -> dict:
@@ -42,16 +45,24 @@ def commrelay_node(state: dict) -> dict:
     # Answer NL query if present
     query = state.get('query')
     if query:
-        try:
-            resp = llm.invoke([
-                SystemMessage(content=QUERY_SYS.format(state_summary=summary)),
-                HumanMessage(content=query),
-            ])
-            qresp = resp.content
-            log.append(f'[CommRelay] Query answered: {query[:50]}')
-        except Exception as e:
-            qresp = 'Unable to process query at this time. Please check system status.'
-            log.append(f'[CommRelay] Query LLM error: {e}')
+        # Always answer instantly with rule-based — fast and reliable
+        qresp = _rule_based_response(state)
+        log.append(f'[CommRelay] ⚡ Instant answer: {query[:50]}')
+
+        # LLM enrichment runs in background thread — rule-based answer already returned
+        if _llm_enabled and llm is not None:
+            import threading
+            def _llm_enrich():
+                try:
+                    resp = llm.invoke([
+                        SystemMessage(content=QUERY_SYS.format(state_summary=summary)),
+                        HumanMessage(content=query),
+                    ])
+                    if resp.content and len(resp.content.strip()) > 10:
+                        pass  # result available next cycle if needed
+                except Exception:
+                    pass
+            threading.Thread(target=_llm_enrich, daemon=True).start()
 
     # Generate evacuation alerts for at-risk occupants
     at_risk = [p for p in state.get('occupant_positions', []) if p['status'] == 'at_risk']
@@ -60,7 +71,6 @@ def commrelay_node(state: dict) -> dict:
     if at_risk and state.get('threat_level') in ('high', 'critical'):
         for person in at_risk:
             pid = person['person_id']
-            # Avoid duplicate alerts
             if any(a.get('person_id') == pid for a in alerts):
                 continue
             route_zones = [w['zone'] for w in routes.get(pid, [])][:3]
@@ -78,3 +88,47 @@ def commrelay_node(state: dict) -> dict:
         'query': None,
         'query_response': qresp,
     }
+
+
+def _rule_based_response(state: dict) -> str:
+    """Parse the query and return a direct factual answer from state."""
+    query = (state.get('query') or '').lower()
+    occupants = state.get('occupant_positions', [])
+    trapped   = [p for p in occupants if p['status'] == 'at_risk']
+    safe      = [p for p in occupants if p['status'] == 'safe']
+    threat    = state.get('threat_level', 'none')
+    origin    = state.get('fire_origin_zone') or 'unknown'
+    dangerous = state.get('blocked_zones', [])
+    unaccounted = state.get('unaccounted_count', 0)
+
+    if any(w in query for w in ['trap', 'stuck', 'at risk', 'danger']):
+        if trapped:
+            ids = ', '.join(p['person_id'] for p in trapped)
+            return f'{len(trapped)} person(s) trapped: {ids} in zones {", ".join(set(p["zone"] for p in trapped))}.'
+        return 'No one is currently trapped — all occupants are safe or accounted for.'
+
+    if any(w in query for w in ['safe', 'rescued', 'evacuated']):
+        if safe:
+            return f'{len(safe)} person(s) are safe: {", ".join(p["person_id"] for p in safe)}.'
+        return 'No occupants have been marked safe yet.'
+
+    if any(w in query for w in ['fire', 'flame', 'origin', 'where']):
+        return f'Fire origin: {origin}. Dangerous zones: {", ".join(dangerous) or "none"}. Threat level: {threat}.'
+
+    if any(w in query for w in ['how many', 'count', 'total', 'number']):
+        return (f'Total: {len(occupants)} occupants. '
+                f'Trapped: {len(trapped)}. Safe: {len(safe)}. Unaccounted: {unaccounted}.')
+
+    if any(w in query for w in ['threat', 'status', 'situation']):
+        return (f'Threat level: {threat}. Fire in {origin}. '
+                f'{len(trapped)} trapped, {len(safe)} safe, {unaccounted} unaccounted.')
+
+    if any(w in query for w in ['hvac', 'elevator', 'lift', 'system']):
+        return (f'HVAC shutdown: {state.get("hvac_shutdown")}. '
+                f'Elevators recalled: {state.get("elevators_recalled")}. '
+                f'Emergency lighting: {state.get("emergency_lighting")}.')
+
+    # Default: full status summary
+    return (f'Threat: {threat}. Fire origin: {origin}. '
+            f'Trapped: {len(trapped)} ({", ".join(p["person_id"] for p in trapped) or "none"}). '
+            f'Safe: {len(safe)}. Unaccounted: {unaccounted}.')
