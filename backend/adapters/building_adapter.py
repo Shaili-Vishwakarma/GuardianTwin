@@ -73,3 +73,28 @@ def find_safe_route_via_building3d(occupant: dict, blocked_zones: list,
         }
         for p in path
     ]
+
+
+def grid_to_zone(grid_x: int, grid_y: int) -> str:
+    """Convert 20x20 grid coords to zone label."""
+    col = min(3, grid_x // 5)
+    floor = 3 - min(2, grid_y // 5)
+    return f'F{floor}-{["A","B","C","D"][col]}'
+
+
+def update_building_from_heatmap(heatmap: dict, building: Building3D):
+    """Sync fire heatmap danger levels into Building3D danger zones."""
+    for zone, data in heatmap.items():
+        if data.get('fire_prob', 0) > 0.3:
+            reg = ZONE_TO_REGION.get(zone)
+            if reg:
+                row, col = reg
+                for r in range(row, row + 5):
+                    for c in range(col, col + 5):
+                        pos = Position3D(
+                            x=float(c) * building.cell_size,
+                            y=float(r) * building.cell_size,
+                            z=float(ZONE_FLOOR.get(zone[:2], 1)) * building.floor_height,
+                            floor=ZONE_FLOOR.get(zone[:2], 1),
+                        )
+                        building.mark_danger(pos, data['fire_prob'])
