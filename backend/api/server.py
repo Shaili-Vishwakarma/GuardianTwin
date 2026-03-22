@@ -26,9 +26,9 @@ from backend.agents.firesense import set_danger_manager
 from backend.agents.tracksense import set_video_analyzer
 
 # Validate required env vars at startup
-_OPENAI_KEY = os.getenv('OPENAI_API_KEY')
-if not _OPENAI_KEY:
-    print('[SERVER] ERROR: OPENAI_API_KEY is not set in .env — exiting.')
+_FIREWORKS_KEY = os.getenv('FIREWORKS_API_KEY')
+if not _FIREWORKS_KEY:
+    print('[SERVER] ERROR: FIREWORKS_API_KEY is not set in .env — exiting.')
     sys.exit(1)
 
 app = FastAPI(title='GuardianTwin API')

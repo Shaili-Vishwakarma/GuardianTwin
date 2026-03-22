@@ -71,6 +71,14 @@ class EmergencyState(TypedDict):
     current_mission_id: Optional[str]
     vision_analysis: Optional[dict]
 
+    # Rescue agents
+    rescue_agents: list
+
+    # Fire suppression
+    brigade_zones: list        # zones where fire brigade is actively fighting fire
+    fire_brigade: list         # fire brigade unit states
+    extinguished_zones: list   # zones confirmed fully extinguished
+
 
 def initial_state() -> EmergencyState:
     return EmergencyState(
@@ -80,8 +88,8 @@ def initial_state() -> EmergencyState:
         fire_origin_zone=None,
         fire_detected_at=None,
         occupant_positions=[],
-        total_registered_occupants=4,
-        unaccounted_count=4,
+        total_registered_occupants=15,
+        unaccounted_count=15,
         safe_routes={},
         blocked_zones=[],
         hvac_shutdown=False,
@@ -96,4 +104,8 @@ def initial_state() -> EmergencyState:
         query_response=None,
         current_mission_id=None,
         vision_analysis=None,
+        rescue_agents=[],
+        brigade_zones=[],
+        fire_brigade=[],
+        extinguished_zones=[],
     )
