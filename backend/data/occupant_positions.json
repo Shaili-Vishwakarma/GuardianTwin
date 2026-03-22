@@ -1,0 +1,6 @@
+[
+  {"person_id": "P1", "zone": "F3-B", "grid_x": 7, "grid_y": 2,  "floor": 3, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P2", "zone": "F3-A", "grid_x": 2, "grid_y": 1,  "floor": 3, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P3", "zone": "F2-C", "grid_x": 12, "grid_y": 7, "floor": 2, "status": "safe",    "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P4", "zone": "F1-D", "grid_x": 17, "grid_y": 11,"floor": 1, "status": "safe",    "last_seen": 0, "coords_3d": null, "danger_level": null}
+]
