@@ -290,6 +290,18 @@ class AtlasLearningDatabase:
             "max_time": round(time_stats[0]["max_time"], 2) if time_stats else 0.0,
         }
 
+    def store_guardian_cycle(self, cycle_data: dict) -> str:
+        """
+        Store one GuardianTwin agent cycle for audit and analysis.
+        Does not affect existing rescue simulation collections.
+        """
+        guardian_collection = self.db['guardian_cycles']
+        result = guardian_collection.insert_one({
+            **cycle_data,
+            'stored_at': datetime.utcnow(),
+        })
+        return str(result.inserted_id)
+
     def clear_scenario_data(self, scenario: str):
         """Clear all data for a scenario (for testing)"""
         self.missions_collection.delete_many({"scenario": scenario})
