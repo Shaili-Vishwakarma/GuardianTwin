@@ -1,6 +1,17 @@
 [
-  {"person_id": "P1", "zone": "F3-B", "grid_x": 7, "grid_y": 2,  "floor": 3, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
-  {"person_id": "P2", "zone": "F3-A", "grid_x": 2, "grid_y": 1,  "floor": 3, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
-  {"person_id": "P3", "zone": "F2-C", "grid_x": 12, "grid_y": 7, "floor": 2, "status": "safe",    "last_seen": 0, "coords_3d": null, "danger_level": null},
-  {"person_id": "P4", "zone": "F1-D", "grid_x": 17, "grid_y": 11,"floor": 1, "status": "safe",    "last_seen": 0, "coords_3d": null, "danger_level": null}
+  {"person_id": "P01", "zone": "F3-B", "grid_x": 7,  "grid_y": 2,  "floor": 3, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P02", "zone": "F3-B", "grid_x": 9,  "grid_y": 3,  "floor": 3, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P03", "zone": "F3-A", "grid_x": 2,  "grid_y": 1,  "floor": 3, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P04", "zone": "F3-A", "grid_x": 4,  "grid_y": 3,  "floor": 3, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P05", "zone": "F3-C", "grid_x": 11, "grid_y": 2,  "floor": 3, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P06", "zone": "F2-A", "grid_x": 1,  "grid_y": 6,  "floor": 2, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P07", "zone": "F2-B", "grid_x": 6,  "grid_y": 7,  "floor": 2, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P08", "zone": "F2-C", "grid_x": 12, "grid_y": 7,  "floor": 2, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P09", "zone": "F2-D", "grid_x": 17, "grid_y": 6,  "floor": 2, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P10", "zone": "F1-A", "grid_x": 2,  "grid_y": 11, "floor": 1, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P11", "zone": "F1-B", "grid_x": 7,  "grid_y": 12, "floor": 1, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P12", "zone": "F1-C", "grid_x": 13, "grid_y": 11, "floor": 1, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P13", "zone": "F1-D", "grid_x": 17, "grid_y": 11, "floor": 1, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P14", "zone": "F2-B", "grid_x": 8,  "grid_y": 8,  "floor": 2, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null},
+  {"person_id": "P15", "zone": "F3-D", "grid_x": 16, "grid_y": 1,  "floor": 3, "status": "unknown", "last_seen": 0, "coords_3d": null, "danger_level": null}
 ]
