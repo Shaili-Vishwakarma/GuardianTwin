@@ -69,16 +69,24 @@ def commrelay_node(state: dict) -> dict:
     routes = state.get('safe_routes', {})
 
     if at_risk and state.get('threat_level') in ('high', 'critical'):
+        scenario = state.get('scenario', 'fire')
         for person in at_risk:
             pid = person['person_id']
             if any(a.get('person_id') == pid for a in alerts):
                 continue
             route_zones = [w['zone'] for w in routes.get(pid, [])][:3]
-            msg = (
-                f'EMERGENCY: Evacuate now. '
-                f'Proceed via: {" > ".join(route_zones) or "emergency exit"}. '
-                f'Do NOT use elevators.'
-            )
+            if scenario == 'attacker':
+                msg = (
+                    f'SECURITY ALERT: Evacuate immediately. '
+                    f'Proceed via: {" > ".join(route_zones) or "emergency exit"}. '
+                    f'Do NOT use elevators. Avoid attacker zones.'
+                )
+            else:
+                msg = (
+                    f'EMERGENCY: Evacuate now. '
+                    f'Proceed via: {" > ".join(route_zones) or "emergency exit"}. '
+                    f'Do NOT use elevators.'
+                )
             alerts.append({'person_id': pid, 'message': msg, 'level': 'critical'})
             log.append(f'[CommRelay] Alert sent to {pid}')
 
@@ -127,6 +135,15 @@ def _rule_based_response(state: dict) -> str:
         return (f'HVAC shutdown: {state.get("hvac_shutdown")}. '
                 f'Elevators recalled: {state.get("elevators_recalled")}. '
                 f'Emergency lighting: {state.get("emergency_lighting")}.')
+
+    if any(w in query for w in ['attacker', 'intruder', 'threat', 'security']):
+        attacker = state.get('attacker_position', {})
+        threatened = state.get('attacker_threat_zones', [])
+        if attacker:
+            return (f'Attacker detected in zone {attacker.get("zone","unknown")} '
+                    f'floor {attacker.get("floor","?")}. '
+                    f'Threatened zones: {", ".join(threatened) or "none"}.')
+        return 'No attacker detected in current scenario.'
 
     # Default: full status summary
     return (f'Threat: {threat}. Fire origin: {origin}. '
