@@ -75,7 +75,7 @@ export default function OperatorQuery({ send, queryResponse }) {
     setLocalResponse(null)
     setQuery('')
     try {
-      const res = await fetch('http://localhost:8000/query', {
+      const res = await fetch('/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: q }),
