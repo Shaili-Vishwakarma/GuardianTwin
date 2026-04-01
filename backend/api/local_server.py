@@ -25,6 +25,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 from backend.core.state import initial_state
 from backend.core.graph import run_cycle
 from backend.agents.firesense import set_danger_manager
+from backend.agents.attackersense import set_attacker_sim
+from backend.agents.rescuenav_bridge import set_db as set_bridge_db, start_mission
 
 # Validate LLM config — only enforce API key for cloud providers
 _provider = os.getenv('LLM_PROVIDER', 'none').lower()
@@ -126,23 +128,30 @@ def _store_cycle(state: dict, latency_ms: float):
 # ── WebSocket broadcast ───────────────────────────────────────────────────────
 async def broadcast(state: dict):
     msg = json.dumps({
-        'threat_level':       state.get('threat_level', 'none'),
-        'fire_heatmap':       state.get('fire_heatmap', {}),
-        'occupant_positions': state.get('occupant_positions', []),
-        'safe_routes':        state.get('safe_routes', {}),
-        'active_alerts':      state.get('active_alerts', []),
-        'agent_action_log':   state.get('agent_action_log', [])[-20:],
-        'hvac_shutdown':      state.get('hvac_shutdown', False),
-        'elevators_recalled': state.get('elevators_recalled', False),
-        'emergency_lighting': state.get('emergency_lighting', False),
-        'fire_origin_zone':   state.get('fire_origin_zone'),
-        'unaccounted_count':  state.get('unaccounted_count', 0),
-        'query_response':     state.get('query_response'),
-        'suppression_active': state.get('suppression_active', []),
-        'rescue_agents':      state.get('rescue_agents', []),
-        'fire_brigade':       state.get('fire_brigade', []),
-        'brigade_zones':      state.get('brigade_zones', []),
-        'extinguished_zones': state.get('extinguished_zones', []),
+        'threat_level':         state.get('threat_level', 'none'),
+        'fire_heatmap':         state.get('fire_heatmap', {}),
+        'occupant_positions':   state.get('occupant_positions', []),
+        'safe_routes':          state.get('safe_routes', {}),
+        'active_alerts':        state.get('active_alerts', []),
+        'agent_action_log':     state.get('agent_action_log', [])[-20:],
+        'hvac_shutdown':        state.get('hvac_shutdown', False),
+        'elevators_recalled':   state.get('elevators_recalled', False),
+        'emergency_lighting':   state.get('emergency_lighting', False),
+        'fire_origin_zone':     state.get('fire_origin_zone'),
+        'unaccounted_count':    state.get('unaccounted_count', 0),
+        'query_response':       state.get('query_response'),
+        'suppression_active':   state.get('suppression_active', []),
+        'rescue_agents':        state.get('rescue_agents', []),
+        'fire_brigade':         state.get('fire_brigade', []),
+        'brigade_zones':        state.get('brigade_zones', []),
+        'extinguished_zones':   state.get('extinguished_zones', []),
+        # New fields
+        'scenario':             state.get('scenario', 'fire'),
+        'attacker_position':    state.get('attacker_position', {}),
+        'attacker_threat_zones': state.get('attacker_threat_zones', []),
+        'mission_history':      state.get('mission_history', {}),
+        'mission_stats':        state.get('mission_stats', {}),
+        'nemo_agent_paths':     state.get('nemo_agent_paths', []),
     })
     dead = []
     for ws in clients:
@@ -160,6 +169,9 @@ def consume_queue(loop: asyncio.AbstractEventLoop):
     while True:
         try:
             payload = sensor_queue.get(timeout=1)
+            # Only process if simulation has been started by user
+            if not _sim_started:
+                continue
             t0 = time.time()
             with lock:
                 current_state['latest_sensor_payload'] = payload
@@ -213,12 +225,172 @@ def get_state():
         ]}
 
 
+@app.get('/missions')
+def get_missions():
+    """Return mission history and learning stats from atlas_learning_db."""
+    with lock:
+        return {
+            'mission_history': current_state.get('mission_history', {}),
+            'mission_stats':   current_state.get('mission_stats', {}),
+            'nemo_agent_paths': current_state.get('nemo_agent_paths', []),
+        }
+
+
+class ScenarioRequest(BaseModel):
+    scenario: str  # 'fire' or 'attacker'
+
+
+@app.post('/scenario')
+def set_scenario(req: ScenarioRequest):
+    """Switch between fire and attacker scenarios."""
+    global current_state
+    if req.scenario not in ('fire', 'attacker'):
+        return {'error': 'scenario must be fire or attacker'}
+    with lock:
+        current_state['scenario'] = req.scenario
+        # Reset fire/attacker state when switching
+        current_state['fire_heatmap'] = {}
+        current_state['blocked_zones'] = []
+        current_state['fire_origin_zone'] = None
+        current_state['fire_detected_at'] = None
+        current_state['attacker_position'] = {}
+        current_state['attacker_threat_zones'] = []
+        current_state['threat_level'] = 'none'
+    print(f'[SERVER] Scenario switched to: {req.scenario}')
+    return {'scenario': req.scenario}
+
+
+@app.post('/trigger_mission')
+def trigger_mission():
+    """Manually trigger a RescueNav 3D simulation mission."""
+    from backend.agents.rescuenav_bridge import start_mission
+    from backend.agents import rescuenav_bridge as _rb
+    if _rb._mission_running:
+        return {'status': 'already_running', 'message': 'A mission is already in progress'}
+    scenario = current_state.get('scenario', 'fire')
+    start_mission(scenario=scenario, num_agents=3, db=_atlas_db)
+    return {'status': 'started', 'scenario': scenario}
+
+
+@app.get('/mission_status')
+def mission_status():
+    """Check if a 3D mission is currently running."""
+    from backend.agents import rescuenav_bridge as _rb
+    return {
+        'running': _rb._mission_running,
+        'count': _rb._mission_count,
+    }
+
+
+# ── Simulation control ────────────────────────────────────────────────────────
+_sim_started = False
+_sim_thread = None
+_sim_stop_event = None  # threading.Event to stop the current simulator
+
+
+@app.post('/reset')
+def reset_simulation():
+    """Reset all state — called when user clicks Home to start fresh."""
+    global _sim_started, current_state, _sim_thread, _sim_stop_event
+    # Stop the running simulator thread first
+    if _sim_stop_event is not None:
+        _sim_stop_event.set()
+        _sim_stop_event = None
+    with lock:
+        # Clear the sensor queue so old readings don't bleed into new sim
+        while not sensor_queue.empty():
+            try:
+                sensor_queue.get_nowait()
+            except Exception:
+                pass
+        # Reset to clean initial state
+        current_state = initial_state()
+        _sim_started = False
+        _sim_thread = None
+    # Clear log buffer
+    _log_buffer.clear()
+    # Reset agent module-level state
+    try:
+        from backend.agents import tracksense as _ts
+        _ts._status_memory.clear()
+        _ts._smoke_history.clear()
+    except Exception:
+        pass
+    try:
+        from backend.agents import rescuesim as _rs
+        _rs._initialized = False
+        _rs.rescued_people.clear()
+    except Exception:
+        pass
+    try:
+        from backend.agents import firebrigade as _fb
+        _fb._initialized = False
+        _fb.extinguished_zones.clear()
+    except Exception:
+        pass
+    try:
+        from backend.agents import attackersense as _as
+        _as._last_update = 0.0
+    except Exception:
+        pass
+    try:
+        from backend.agents import systemctrl as _sc
+        _sc._zone_danger_since.clear()
+    except Exception:
+        pass
+    print('[SERVER] Simulation reset — ready for new scenario')
+    return {'status': 'reset'}
+
+
+class StartRequest(BaseModel):
+    scenario: str = 'fire'  # 'fire' or 'attacker'
+
+
+@app.post('/start_simulation')
+def start_simulation(req: StartRequest = None):
+    """Start the sensor simulator with chosen scenario."""
+    global _sim_started, current_state
+    if _sim_started:
+        return {'status': 'already_running', 'scenario': current_state.get('scenario')}
+    scenario = (req.scenario if req else 'fire')
+    if scenario not in ('fire', 'attacker'):
+        scenario = 'fire'
+    with lock:
+        current_state['scenario'] = scenario
+    from backend.simulator.local_sim import start_in_thread
+    _sim_stop_event = start_in_thread(sensor_queue, scenario)
+    _sim_started = True
+    print(f'[SERVER] Simulation started — scenario: {scenario}')
+
+    # Immediately inject a baseline payload so the dashboard shows data right away
+    import threading as _t
+    def _inject_initial():
+        import time as _time
+        import random as _random
+        _time.sleep(0.5)  # let the consumer thread start
+        zones = [f'F{f}-{z}' for f in range(1, 4) for z in ['A', 'B', 'C', 'D']]
+        readings = [{
+            'zone': z, 'timestamp': _time.time(),
+            'smoke_ppm': round(_random.uniform(5, 15), 2),
+            'temp_c': round(20 + _random.uniform(-1, 1), 2),
+            'co_ppm': round(_random.uniform(1, 5), 2),
+            'humidity': round(_random.uniform(40, 60), 2),
+            'flame': False,
+        } for z in zones]
+        sensor_queue.put({'readings': readings, 'sim_time': 0.0})
+        print('[SERVER] Initial baseline payload injected')
+    _t.Thread(target=_inject_initial, daemon=True).start()
+
+    return {'status': 'started', 'scenario': scenario}
+
+
 @app.get('/health')
 def health():
     return {
         'status': 'ok',
         'mode': 'local (no Docker)',
         'mongodb': _mongo_connected,
+        'scenario': current_state.get('scenario', 'fire'),
     }
 
 
@@ -279,20 +451,48 @@ async def logs_stream():
 def startup():
     _init_atlas()
 
-    # Inject DangerManager into FireSense
+    # Inject bridge db reference
+    set_bridge_db(_atlas_db)
+
+    # Inject DangerManager into FireSense (fire scenario)
+    _shared_building = None
     try:
         from building_navigator import Building3D
         from danger_simulator import DangerManager
-        building = Building3D()
-        dm = DangerManager(building, scenario='fire')
-        set_danger_manager(dm)
-        print('[SERVER] DangerManager injected into FireSense')
+        _shared_building = Building3D()
+        dm_fire = DangerManager(_shared_building, scenario='fire')
+        set_danger_manager(dm_fire)
+        print('[SERVER] DangerManager (fire) injected into FireSense')
     except Exception as e:
         print(f'[SERVER] DangerManager unavailable: {e}')
 
-    # Start sensor simulator in background thread
-    from backend.simulator.local_sim import start_in_thread
-    start_in_thread(sensor_queue)
+    # Inject AttackerSimulator into AttackerSense (attacker scenario)
+    try:
+        from building_navigator import Building3D
+        from danger_simulator import DangerManager
+        building_a = _shared_building or Building3D()
+        dm_attacker = DangerManager(building_a, scenario='attacker')
+        set_attacker_sim(dm_attacker.attacker_sim)
+        print('[SERVER] AttackerSimulator injected into AttackerSense')
+    except Exception as e:
+        print(f'[SERVER] AttackerSimulator unavailable: {e}')
+
+    # Inject VideoAnalyzer if VIDEO_PATH is set
+    video_path = os.getenv('VIDEO_PATH', '')
+    if video_path and os.path.exists(video_path):
+        try:
+            from main import VideoAnalyzer
+            from backend.agents.tracksense import set_video_analyzer
+            va = VideoAnalyzer()
+            set_video_analyzer(va)
+            print(f'[SERVER] VideoAnalyzer injected — using {video_path}')
+        except Exception as e:
+            print(f'[SERVER] VideoAnalyzer unavailable: {e}')
+    else:
+        print('[SERVER] VIDEO_PATH not set — using stub occupant data')
+
+    # NOTE: Simulator is NOT auto-started — user clicks Start on dashboard
+    # start_in_thread(sensor_queue)  ← moved to /start_simulation endpoint
 
     # Start queue consumer thread (needs the event loop)
     loop = asyncio.get_event_loop()
@@ -301,6 +501,7 @@ def startup():
     print('[SERVER] Local mode started — no Docker needed.')
     print('[SERVER] Dashboard: http://localhost:5173')
     print('[SERVER] API:       http://localhost:8000')
+    print('[SERVER] Click START on the dashboard to begin simulation.')
 
 
 if __name__ == '__main__':
