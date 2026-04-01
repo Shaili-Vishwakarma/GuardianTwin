@@ -69,6 +69,9 @@ export default function FloorPlan({ state }) {
   const extinguishedZones  = state?.extinguished_zones  || []
   const unaccounted   = state?.unaccounted_count  ?? 0
   const elevatorsOff  = state?.elevators_recalled ?? false
+  const scenario      = state?.scenario           || 'fire'
+  const attackerPos   = state?.attacker_position  || null
+  const nemoAgentPaths = state?.nemo_agent_paths  || []
 
   const routeLines = useMemo(() =>
     Object.entries(routes).flatMap(([pid, wps]) => {
@@ -130,22 +133,27 @@ export default function FloorPlan({ state }) {
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10 }}>
         {/* Legend */}
         <div style={{ display: 'flex', gap: 12, fontSize: 12, color: '#64748b', flexWrap: 'wrap' }}>
-          <span><span style={{ color: '#ef4444' }}>●</span> Trapped</span>
+          <span><span style={{ color: '#ef4444' }}>●</span> {scenario === 'fire' ? 'Trapped' : 'At Risk'}</span>
           <span><span style={{ color: '#22c55e' }}>●</span> Safe</span>
           <span><span style={{ color: '#f59e0b' }}>●</span> Unknown</span>
-          <span><span style={{ color: '#ff6600' }}>🔥</span> Fire origin</span>
+          {scenario === 'fire' && <span><span style={{ color: '#ff6600' }}>🔥</span> Fire origin</span>}
           <span><span style={{ color: '#22c55e' }}>▬</span> Evac route</span>
-          <span><span style={{ color: '#a78bfa' }}>◆</span> Rescue agent</span>
+          {scenario === 'fire' && <span><span style={{ color: '#a78bfa' }}>◆</span> Rescue agent</span>}
+          {scenario === 'attacker' && <span><span style={{ color: '#60a5fa' }}>◆</span> Police unit</span>}
           <span>
             <span style={{ color: elevatorsOff ? '#ef4444' : '#22c55e' }}>▣</span>
             {' '}Lift {elevatorsOff ? '(OFF)' : '(ON)'}
           </span>
           <span><span style={{ color: '#60a5fa' }}>⊞</span> Stairwell</span>
-          <span><span style={{ color: '#f43f5e' }}>◆</span> Fire Brigade</span>
-          <span><span style={{ color: '#38bdf8' }}>~</span> Sprinklers</span>
-          <span><span style={{ color: '#64748b' }}>✅</span> Cleared</span>
+          {scenario === 'fire' && <span><span style={{ color: '#f43f5e' }}>◆</span> Fire Brigade</span>}
+          {scenario === 'fire' && <span><span style={{ color: '#38bdf8' }}>~</span> Sprinklers</span>}
+          {scenario === 'fire' && <span><span style={{ color: '#64748b' }}>✅</span> Cleared</span>}
+          {scenario === 'attacker' && <span><span style={{ color: '#ef4444' }}>✕</span> Attacker</span>}
           {unaccounted > 0 && (
             <span style={{ color: '#ef4444', fontWeight: 'bold' }}>⚠ {unaccounted} UNACCOUNTED</span>
+          )}
+          {nemoAgentPaths.length > 0 && scenario === 'fire' && (
+            <span><span style={{ color: '#c084fc' }}>~</span> 3D NeMo path</span>
           )}
         </div>
 
@@ -316,8 +324,9 @@ export default function FloorPlan({ state }) {
           </g>
         ))}
 
-        {/* Fire origin — pulsing (hidden once extinguished or all clear) */}
-        {fireOriginCenter
+        {/* Fire origin — only in fire scenario, pulsing */}
+        {scenario === 'fire'
+          && fireOriginCenter
           && threat !== 'none'
           && !extinguishedZones.includes(fireOrigin)
           && (hm[fireOrigin]?.fire_prob ?? 0) > 0.05
@@ -377,8 +386,8 @@ export default function FloorPlan({ state }) {
           )
         })}
 
-        {/* Rescue agent trails */}
-        {rescueAgents.map(agent => {
+        {/* Rescue agent trails — fire scenario only */}
+        {scenario === 'fire' && rescueAgents.map(agent => {
           const trail = agent.path_history || []
           if (trail.length < 2) return null
           const pts = trail.map(p =>
@@ -391,8 +400,8 @@ export default function FloorPlan({ state }) {
           )
         })}
 
-        {/* Rescue agents — diamond */}
-        {rescueAgents.map(agent => {
+        {/* Rescue agents — diamond — fire scenario only */}
+        {scenario === 'fire' && rescueAgents.map(agent => {
           if (agent.status === 'standby') return null
           const cx = agent.grid_x * CELL + CELL / 2
           const cy = agent.grid_y * CELL + CELL / 2
@@ -430,8 +439,8 @@ export default function FloorPlan({ state }) {
             </g>
           )
         })}
-        {/* Fire Brigade trails */}
-        {fireBrigade.map(unit => {
+        {/* Fire Brigade trails — fire scenario only */}
+        {scenario === 'fire' && fireBrigade.map(unit => {
           const trail = unit.path_history || []
           if (trail.length < 2) return null
           const pts = trail.map(p =>
@@ -444,8 +453,8 @@ export default function FloorPlan({ state }) {
           )
         })}
 
-        {/* Fire Brigade units — red square */}
-        {fireBrigade.map(unit => {
+        {/* Fire Brigade units — fire scenario only */}
+        {scenario === 'fire' && fireBrigade.map(unit => {
           if (unit.status === 'standby') return null
           const cx = unit.grid_x * CELL + CELL / 2
           const cy = unit.grid_y * CELL + CELL / 2
@@ -478,6 +487,92 @@ export default function FloorPlan({ state }) {
             </g>
           )
         })}
+
+        {/* Police units — attacker scenario only (rescue agents act as police) */}
+        {scenario === 'attacker' && rescueAgents.map(agent => {
+          if (agent.status === 'standby') return null
+          const cx = agent.grid_x * CELL + CELL / 2
+          const cy = agent.grid_y * CELL + CELL / 2
+          return (
+            <g key={`police-${agent.id}`} style={{ cursor: 'pointer' }}
+              onMouseMove={e => showTip(e, [
+                { text: `Police Unit ${agent.id}`, bold: true, color: '#60a5fa' },
+                { text: `Status: ${agent.status.toUpperCase()}`, color: '#60a5fa' },
+                { text: `Target: ${agent.target || 'none'}`, color: '#e2e8f0' },
+                { text: `Position: grid (${agent.grid_x}, ${agent.grid_y})`, color: '#94a3b8' },
+              ])}
+              onMouseLeave={hideTip}>
+              {agent.status === 'on_scene' && (
+                <circle cx={cx} cy={cy} r={14} fill='#60a5fa' opacity={0.2}>
+                  <animate attributeName='r' values='12;20;12' dur='0.8s' repeatCount='indefinite' />
+                </circle>
+              )}
+              <polygon points={`${cx},${cy-11} ${cx+9},${cy} ${cx},${cy+11} ${cx-9},${cy}`}
+                fill='#60a5fa' opacity={0.95} />
+              <text x={cx} y={cy + 4} textAnchor='middle' fill='white' fontSize={8} fontWeight='bold'>
+                {agent.id}
+              </text>
+              <text x={cx} y={cy - 15} textAnchor='middle' fill='#60a5fa' fontSize={11}>
+                {agent.status === 'on_scene' ? '🚔' : agent.status === 'escorting' ? '🤝' : '→🔴'}
+              </text>
+            </g>
+          )
+        })}
+
+        {/* NeMo 3D agent paths — shown as thin purple trails */}
+        {nemoAgentPaths.map((agent, idx) => {
+          const trail = agent.path || []
+          if (trail.length < 2) return null
+          const pts = trail.map(p =>
+            `${p.grid_x * CELL + CELL / 2},${p.grid_y * CELL + CELL / 2}`
+          ).join(' ')
+          const colors = ['#c084fc', '#f0abfc', '#e879f9']
+          const color = colors[idx % colors.length]
+          return (
+            <g key={`nemo-${agent.agent_id}`}>
+              <polyline points={pts} fill='none' stroke={color}
+                strokeWidth={1.5} strokeDasharray='2 3' opacity={0.5} />
+              {trail.length > 0 && (
+                <circle
+                  cx={trail[trail.length-1].grid_x * CELL + CELL / 2}
+                  cy={trail[trail.length-1].grid_y * CELL + CELL / 2}
+                  r={5} fill={color} opacity={0.7} />
+              )}
+            </g>
+          )
+        })}
+
+        {/* Attacker — shown as pulsing red X when scenario=attacker */}
+        {scenario === 'attacker' && attackerPos && attackerPos.grid_x != null && (
+          <g style={{ cursor: 'pointer' }}
+            onMouseMove={e => showTip(e, [
+              { text: 'ATTACKER', bold: true, color: '#ef4444' },
+              { text: `Zone: ${attackerPos.zone}  Floor ${attackerPos.floor}`, color: '#94a3b8' },
+              { text: `Danger level: ${(attackerPos.danger_level * 100).toFixed(0)}%`, color: '#ef4444' },
+              { text: 'Evacuate adjacent zones immediately', color: '#fbbf24' },
+            ])}
+            onMouseLeave={hideTip}>
+            <circle
+              cx={attackerPos.grid_x * CELL + CELL / 2}
+              cy={attackerPos.grid_y * CELL + CELL / 2}
+              r={16} fill='#ef4444' opacity={0.15}>
+              <animate attributeName='r' values='14;22;14' dur='0.7s' repeatCount='indefinite' />
+              <animate attributeName='opacity' values='0.15;0.35;0.15' dur='0.7s' repeatCount='indefinite' />
+            </circle>
+            <text
+              x={attackerPos.grid_x * CELL + CELL / 2}
+              y={attackerPos.grid_y * CELL + CELL / 2 + 6}
+              textAnchor='middle' fontSize={18} fill='#ef4444' fontWeight='bold'>
+              ✕
+            </text>
+            <text
+              x={attackerPos.grid_x * CELL + CELL / 2}
+              y={attackerPos.grid_y * CELL + CELL / 2 - 18}
+              textAnchor='middle' fontSize={10} fill='#ef4444' fontWeight='bold'>
+              ATTACKER
+            </text>
+          </g>
+        )}
 
         {/* Tooltip */}
         {tooltip && (
