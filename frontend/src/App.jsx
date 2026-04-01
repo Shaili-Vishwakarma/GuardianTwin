@@ -3,6 +3,7 @@ import { useWebSocket } from './hooks/useWebSocket'
 import FloorPlan from './components/FloorPlan'
 import LogsPanel from './components/LogsPanel'
 import OperatorQuery from './components/OperatorQuery'
+import MissionPanel from './components/MissionPanel'
 
 const THREAT_COLORS = {
   none: '#22c55e', low: '#84cc16', medium: '#f59e0b',
@@ -25,12 +26,36 @@ function playSiren(ctx) {
 }
 
 export default function App() {
-  const { data: state, send } = useWebSocket('ws://localhost:8000/ws')
+  // WebSocket: use Vite proxy in dev, direct in prod
+  const wsUrl = typeof window !== 'undefined'
+    ? `ws://${window.location.host}/ws`
+    : 'ws://localhost:8000/ws'
+  const { data: state, send } = useWebSocket(wsUrl)
   const threat = state?.threat_level || 'none'
 
   const audioCtxRef = useRef(null)
   const sirenFired  = useRef(false)
   const [audioArmed, setAudioArmed] = useState(false)
+  const [simStarted, setSimStarted] = useState(false)
+  const [simStarting, setSimStarting] = useState(false)
+  const [chosenScenario, setChosenScenario] = useState(null) // 'fire' | 'attacker'
+  const [videoFile, setVideoFile] = useState(null)
+
+  const startSimulation = async (sc) => {
+    setSimStarting(true)
+    try {
+      await fetch('/start_simulation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenario: sc }),
+      })
+      setSimStarted(true)
+    } catch (e) {
+      alert('Could not reach backend. Make sure python backend/api/local_server.py is running.')
+    } finally {
+      setSimStarting(false)
+    }
+  }
 
   const armAudio = () => {
     if (audioCtxRef.current) return
@@ -63,9 +88,36 @@ export default function App() {
   const fireBrigade       = state?.fire_brigade || []
   const suppressionZones  = state?.suppression_active || []
   const extinguishedZones = state?.extinguished_zones || []
-  const allClear = threat === 'none' && extinguishedZones.length > 0
-    && trapped.length === 0 && unaccounted === 0
+  const scenario          = state?.scenario || 'fire'
+  const missionHistory    = state?.mission_history || {}
+  const missionStats      = state?.mission_stats || {}
+  const allClear = scenario === 'fire'
+    ? (threat === 'none' && extinguishedZones.length > 0 && trapped.length === 0 && unaccounted === 0)
+    : (threat === 'none' && trapped.length === 0)
   const threatBg = allClear ? '#16a34a' : THREAT_COLORS[threat]
+
+  const switchScenario = (s) => {
+    fetch('/scenario', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario: s }),
+    })
+  }
+
+  const returnHome = async () => {
+    // Reset backend — clears all state and allows fresh start
+    try {
+      await fetch('/reset', { method: 'POST' })
+    } catch (e) {}
+    // Reset frontend state
+    setSimStarted(false)
+    setChosenScenario(null)
+    setVideoFile(null)
+    sirenFired.current = false
+  }
+
+  // Both scenario AND video required to enable Start
+  const canStart = !!chosenScenario && !!videoFile && !simStarting
 
   return (
     <div style={{
@@ -74,12 +126,162 @@ export default function App() {
       padding: '8px 14px', gap: 6, boxSizing: 'border-box',
     }}>
 
+      {/* START OVERLAY */}
+      {!simStarted && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(2,6,23,0.98)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 20,
+          overflowY: 'auto', padding: 24,
+        }}>
+          <div style={{ fontSize: 44 }}>🛡</div>
+          <div style={{ color: '#3b82f6', fontSize: 30, fontWeight: 'bold' }}>GuardianTwin</div>
+          <div style={{ color: '#64748b', fontSize: 15, textAlign: 'center', maxWidth: 480 }}>
+            Multi-Agent AIoT Emergency Response System
+          </div>
+
+          {/* Feature tags */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+            {['🔥 Fire Spread CA', '👥 Occupant Tracking', '🗺 A* Routing', '🤖 LangGraph Agents', '🚒 Fire Brigade', '🏃 Rescue Agents'].map(f => (
+              <span key={f} style={{
+                background: '#0f172a', border: '1px solid #334155',
+                borderRadius: 6, padding: '5px 10px', fontSize: 12, color: '#94a3b8',
+              }}>{f}</span>
+            ))}
+          </div>
+
+          {/* Scenario selection */}
+          <div style={{ fontSize: 14, color: '#475569', marginTop: 8 }}>Choose a scenario to simulate:</div>
+          <div style={{ display: 'flex', gap: 16 }}>
+            {/* Fire scenario */}
+            <div
+              onClick={() => !simStarting && setChosenScenario('fire')}
+              style={{
+                width: 200, padding: '20px 16px', borderRadius: 12, cursor: 'pointer',
+                background: chosenScenario === 'fire' ? '#1a0505' : '#0f172a',
+                border: `2px solid ${chosenScenario === 'fire' ? '#ef4444' : '#334155'}`,
+                textAlign: 'center', transition: 'all 0.2s',
+              }}
+            >
+              <div style={{ fontSize: 36, marginBottom: 8 }}>🔥</div>
+              <div style={{ color: '#fca5a5', fontWeight: 'bold', fontSize: 16, marginBottom: 6 }}>Fire Simulation</div>
+              <div style={{ color: '#64748b', fontSize: 12, lineHeight: 1.6 }}>
+                Fire spreads from F3-B at T+30s.<br/>
+                Sprinklers, fire brigade,<br/>
+                evacuation routes.
+              </div>
+            </div>
+
+            {/* Attacker scenario */}
+            <div
+              onClick={() => !simStarting && setChosenScenario('attacker')}
+              style={{
+                width: 200, padding: '20px 16px', borderRadius: 12, cursor: 'pointer',
+                background: chosenScenario === 'attacker' ? '#1a0505' : '#0f172a',
+                border: `2px solid ${chosenScenario === 'attacker' ? '#dc2626' : '#334155'}`,
+                textAlign: 'center', transition: 'all 0.2s',
+              }}
+            >
+              <div style={{ fontSize: 36, marginBottom: 8 }}>🔴</div>
+              <div style={{ color: '#f87171', fontWeight: 'bold', fontSize: 16, marginBottom: 6 }}>Attacker Simulation</div>
+              <div style={{ color: '#64748b', fontSize: 12, lineHeight: 1.6 }}>
+                Intruder patrols floors 2–3.<br/>
+                Evacuation alerts,<br/>
+                security lockdown.
+              </div>
+            </div>
+          </div>
+
+          {/* Video upload section */}
+          <div style={{
+            width: 420, background: '#0f172a', border: '1px solid #1e293b',
+            borderRadius: 10, padding: '14px 16px',
+          }}>
+            <div style={{ fontSize: 13, color: '#475569', marginBottom: 8 }}>
+              📹 Optional: Upload building footage
+            </div>
+            <div style={{
+              border: '2px dashed #334155', borderRadius: 8, padding: '16px',
+              textAlign: 'center', cursor: 'pointer', position: 'relative',
+              background: videoFile ? '#0d1f0d' : 'transparent',
+              transition: 'all 0.2s',
+            }}
+              onClick={() => document.getElementById('video-upload').click()}
+            >
+              <input
+                id='video-upload' type='file' accept='video/*'
+                style={{ display: 'none' }}
+                onChange={e => setVideoFile(e.target.files[0] || null)}
+              />
+              {videoFile ? (
+                <div>
+                  <div style={{ fontSize: 20, marginBottom: 4 }}>✅</div>
+                  <div style={{ color: '#4ade80', fontSize: 13 }}>{videoFile.name}</div>
+                  <div style={{ color: '#334155', fontSize: 11, marginTop: 4 }}>
+                    Video loaded (display only — AI analysis coming soon)
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 24, marginBottom: 4 }}>🎬</div>
+                  <div style={{ color: '#64748b', fontSize: 13 }}>Click to upload video footage</div>
+                  <div style={{ color: '#334155', fontSize: 11, marginTop: 4 }}>MP4, AVI, MOV supported</div>
+                </div>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: '#334155', marginTop: 8, textAlign: 'center' }}>
+              Video is displayed for demo purposes. Live AI analysis via VideoAnalyzer is available when VIDEO_PATH is set in backend/.env
+            </div>
+          </div>
+
+          {/* Start button */}
+          <button
+            onClick={() => canStart && startSimulation(chosenScenario)}
+            disabled={!canStart}
+            style={{
+              marginTop: 4,
+              background: !canStart ? '#1e293b' : simStarting ? '#166534' : '#16a34a',
+              color: !canStart ? '#475569' : 'white',
+              border: 'none',
+              padding: '13px 52px', borderRadius: 10,
+              fontSize: 18, fontWeight: 'bold',
+              cursor: !canStart ? 'not-allowed' : 'pointer',
+              boxShadow: canStart ? '0 0 24px #16a34a44' : 'none',
+              transition: 'all 0.2s',
+            }}
+          >
+            {simStarting ? '⏳ Starting...'
+              : !chosenScenario && !videoFile ? 'Select scenario + upload video'
+              : !chosenScenario ? 'Select a scenario above'
+              : !videoFile ? 'Upload a video to continue'
+              : `▶ Start ${chosenScenario === 'fire' ? 'Fire' : 'Attacker'} Simulation`}
+          </button>
+
+          <div style={{ color: '#334155', fontSize: 12 }}>
+            {chosenScenario === 'fire' ? 'Fire triggers at T+30s in zone F3-B'
+              : chosenScenario === 'attacker' ? 'Attacker begins patrol on floors 2–3'
+              : ''}
+          </div>
+        </div>
+      )}
+
       {/* TOP BAR */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
         borderBottom: '1px solid #1e293b', paddingBottom: 6, flexWrap: 'nowrap',
         minWidth: 0,
       }}>
+        <button
+          onClick={returnHome}
+          title='Return to start page'
+          style={{
+            background: '#0f172a', border: '1px solid #334155',
+            color: '#64748b', borderRadius: 6, padding: '4px 10px',
+            cursor: 'pointer', fontSize: 16, lineHeight: 1,
+            flexShrink: 0,
+          }}
+        >⌂</button>
         <span style={{ color: '#3b82f6', fontWeight: 'bold', fontSize: 19, whiteSpace: 'nowrap' }}>
           GuardianTwin
         </span>
@@ -96,6 +298,16 @@ export default function App() {
         {!state && <Tag color='#64748b'>Connecting...</Tag>}
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          {/* Scenario indicator — locked after start, no toggle */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: '#0f172a', borderRadius: 6, padding: '5px 12px',
+            border: `1px solid ${scenario === 'fire' ? '#ef444455' : '#dc262655'}`,
+            fontSize: 13, color: scenario === 'fire' ? '#fca5a5' : '#f87171',
+            fontFamily: 'monospace',
+          }}>
+            {scenario === 'fire' ? '🔥 Fire Scenario' : '🔴 Attacker Scenario'}
+          </div>
           <button
             onClick={armAudio}
             style={{
@@ -110,6 +322,7 @@ export default function App() {
           >
             {audioArmed ? '🔔 Armed' : '🔕 Siren'}
           </button>
+          <MissionPanel missionHistory={missionHistory} missionStats={missionStats} scenario={scenario} />
           <OperatorQuery send={send} queryResponse={state?.query_response} />
           <LogsPanel />
         </div>
@@ -118,7 +331,8 @@ export default function App() {
       {/* STAT CARDS */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, flexShrink: 0 }}>
         <StatCard label='TOTAL'          value={occupants.length} color='#94a3b8' />
-        <StatCard label='TRAPPED'        value={trapped.length}   color='#ef4444' blink={trapped.length > 0} />
+        <StatCard label={scenario === 'fire' ? 'TRAPPED' : 'AT RISK'}
+                  value={trapped.length}   color='#ef4444' blink={trapped.length > 0} />
         <StatCard label='UNACCOUNTED'    value={unaccounted}      color='#f59e0b' />
         <StatCard label='SAFE'           value={safe.length}      color='#22c55e' />
       </div>
@@ -140,19 +354,19 @@ export default function App() {
 
           {/* Operations */}
           <div style={{ background: '#0f172a', borderRadius: 8, padding: '7px 12px', flexShrink: 0 }}>
-            <SectionLabel>OPERATIONS</SectionLabel>
+            <SectionLabel>{scenario === 'fire' ? 'OPERATIONS' : 'SECURITY RESPONSE'}</SectionLabel>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
               {rescueAgents.filter(a => a.status !== 'standby').map(a => (
                 <AgentBadge key={a.id} id={a.id} color={a.color}
                   target={a.target || '—'}
                   statusLabel={
-                    a.status === 'responding' ? 'responding'
+                    a.status === 'responding' ? (scenario === 'fire' ? 'responding' : 'evacuating')
                   : a.status === 'on_scene'   ? 'on scene'
-                  : a.status === 'escorting'  ? 'escorting'
+                  : a.status === 'escorting'  ? (scenario === 'fire' ? 'escorting' : 'securing')
                   : a.status}
                 />
               ))}
-              {fireBrigade.filter(u => u.status !== 'standby').map(u => (
+              {scenario === 'fire' && fireBrigade.filter(u => u.status !== 'standby').map(u => (
                 <AgentBadge key={u.id} id={u.id} color={u.color}
                   target={u.target_zone || '—'}
                   statusLabel={
@@ -162,25 +376,33 @@ export default function App() {
                   : u.status}
                 />
               ))}
-              {rescueAgents.every(a => a.status === 'standby') && fireBrigade.every(u => u.status === 'standby') && (
-                <span style={{ fontSize: 15, color: '#475569' }}>All units standby</span>
+              {rescueAgents.every(a => a.status === 'standby') &&
+               (scenario === 'fire' ? fireBrigade.every(u => u.status === 'standby') : true) && (
+                <span style={{ fontSize: 15, color: '#475569' }}>
+                  {scenario === 'fire' ? 'All units standby' : 'Security on standby — monitoring'}
+                </span>
               )}
             </div>
-            {suppressionZones.length > 0 && (
+            {suppressionZones.length > 0 && scenario === 'fire' && (
               <div style={{ fontSize: 15, color: '#38bdf8', marginTop: 5 }}>
                 Sprinklers active: {suppressionZones.join(', ')}
               </div>
             )}
+            {scenario === 'attacker' && state?.attacker_position?.zone && (
+              <div style={{ fontSize: 15, color: '#f87171', marginTop: 5 }}>
+                🔴 Intruder last seen: {state.attacker_position.zone} (Floor {state.attacker_position.floor})
+              </div>
+            )}
           </div>
 
-          {/* Trapped people */}
+          {/* Trapped / At-risk people */}
           {trapped.length > 0 && (
             <div style={{
               background: '#1a0a0a', border: '1px solid #ef4444',
               borderRadius: 8, padding: '7px 12px', flexShrink: 0,
             }}>
               <div style={{ fontSize: 15, color: '#ef4444', fontWeight: 'bold', marginBottom: 5 }}>
-                {trapped.length} TRAPPED
+                {scenario === 'fire' ? `🔥 ${trapped.length} TRAPPED` : `🔴 ${trapped.length} AT RISK`}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                 {trapped.map(p => (
@@ -216,7 +438,7 @@ export default function App() {
 
           {/* Live alerts */}
           <div style={{ background: '#0f172a', borderRadius: 8, padding: '7px 12px', flexShrink: 0 }}>
-            <SectionLabel>LIVE ALERTS</SectionLabel>
+            <SectionLabel>{scenario === 'fire' ? 'LIVE ALERTS' : 'SECURITY ALERTS'}</SectionLabel>
             {(state?.active_alerts || []).slice(-3).reverse().map((a, i) => (
               <div key={i} style={{
                 fontSize: 15, color: '#cbd5e1', borderLeft: '3px solid #ef4444',
@@ -256,10 +478,28 @@ export default function App() {
             flexShrink: 0, fontSize: 15, color: '#64748b',
             display: 'flex', gap: 14, flexWrap: 'wrap',
           }}>
-            <span>Origin: <span style={{ color: '#f87171' }}>{state?.fire_origin_zone || '—'}</span></span>
-            <span>Routes: <span style={{ color: '#34d399' }}>{Object.keys(state?.safe_routes || {}).length}</span></span>
-            <span>Suppression: <span style={{ color: '#38bdf8' }}>{suppressionZones.join(', ') || 'none'}</span></span>
-            <span>Extinguished: <span style={{ color: '#22c55e' }}>{extinguishedZones.join(', ') || 'none'}</span></span>
+            {scenario === 'fire' ? (
+              <>
+                <span>Origin: <span style={{ color: '#f87171' }}>{state?.fire_origin_zone || '—'}</span></span>
+                <span>Routes: <span style={{ color: '#34d399' }}>{Object.keys(state?.safe_routes || {}).length}</span></span>
+                <span>Suppression: <span style={{ color: '#38bdf8' }}>{suppressionZones.join(', ') || 'none'}</span></span>
+                <span>Extinguished: <span style={{ color: '#22c55e' }}>{extinguishedZones.join(', ') || 'none'}</span></span>
+              </>
+            ) : (
+              <>
+                <span>Attacker zone: <span style={{ color: '#ef4444' }}>{state?.attacker_position?.zone || '—'}</span></span>
+                <span>Floor: <span style={{ color: '#f87171' }}>{state?.attacker_position?.floor ?? '—'}</span></span>
+                <span>Threatened: <span style={{ color: '#fbbf24' }}>{(state?.attacker_threat_zones || []).join(', ') || 'none'}</span></span>
+              </>
+            )}
+            {Object.keys(missionHistory).length > 0 && (
+              <span>
+                3D Mission #{missionHistory.mission_number}:{' '}
+                <span style={{ color: missionHistory.success ? '#4ade80' : '#f87171' }}>
+                  {missionHistory.success ? 'SUCCESS' : 'FAILED'}
+                </span>
+              </span>
+            )}
           </div>
 
         </div>
@@ -279,6 +519,8 @@ export default function App() {
 function logColor(line) {
   if (line.includes('FireBrigade')) return '#f43f5e'
   if (line.includes('RescueSim') || line.includes('TrackSense')) return '#a78bfa'
+  if (line.includes('RescueNav')) return '#c084fc'
+  if (line.includes('AttackerSense')) return '#fb7185'
   if (line.includes('SystemCtrl')) return '#38bdf8'
   if (line.includes('FireSense')) return '#fb923c'
   if (line.includes('Orchestrator')) return '#facc15'
