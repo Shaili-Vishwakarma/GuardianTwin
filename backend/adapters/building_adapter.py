@@ -83,18 +83,6 @@ def grid_to_zone(grid_x: int, grid_y: int) -> str:
 
 
 def update_building_from_heatmap(heatmap: dict, building: Building3D):
-    """Sync fire heatmap danger levels into Building3D danger zones."""
-    for zone, data in heatmap.items():
-        if data.get('fire_prob', 0) > 0.3:
-            reg = ZONE_TO_REGION.get(zone)
-            if reg:
-                row, col = reg
-                for r in range(row, row + 5):
-                    for c in range(col, col + 5):
-                        pos = Position3D(
-                            x=float(c) * building.cell_size,
-                            y=float(r) * building.cell_size,
-                            z=float(ZONE_FLOOR.get(zone[:2], 1)) * building.floor_height,
-                            floor=ZONE_FLOOR.get(zone[:2], 1),
-                        )
-                        building.mark_danger(pos, data['fire_prob'])
+    """Sync fire heatmap danger levels into Building3D via update_danger_zones()."""
+    from backend.adapters.danger_adapter import update_building_from_heatmap as _update
+    _update(heatmap, building)
