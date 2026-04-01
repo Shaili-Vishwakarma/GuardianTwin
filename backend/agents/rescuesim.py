@@ -82,6 +82,8 @@ def rescuesim_node(state: dict) -> dict:
     if not _initialized:
         _init_agents()
 
+    # Rescue agents operate in both scenarios — people need evacuation regardless
+    # But in attacker scenario, they evacuate people away from attacker zones
     occupants = state.get('occupant_positions', [])
     heatmap   = state.get('fire_heatmap', {})
     log       = list(state.get('agent_action_log', []))
