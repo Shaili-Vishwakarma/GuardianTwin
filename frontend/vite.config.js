@@ -2,36 +2,62 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { spawn } from 'child_process'
 import path from 'path'
+import fs from 'fs'
 
-// Auto-start backend when Vite dev server starts
+// Find the correct Python executable
+function findPython() {
+  const candidates = [
+    'C:\\Users\\hp\\AppData\\Local\\Programs\\Python\\Python311\\python.exe',
+    process.env.PYTHON || '',
+    'python3',
+    'python',
+  ]
+  for (const p of candidates) {
+    if (!p) continue
+    if (p.includes('\\') || p.includes('/')) {
+      if (fs.existsSync(p)) return p
+    } else {
+      return p  // system PATH entry — try it
+    }
+  }
+  return 'python'
+}
+
 function backendPlugin() {
   let backendProcess = null
 
   return {
     name: 'guardian-backend',
-    configureServer(server) {
+    configureServer() {
       const root = path.resolve(__dirname, '..')
+      const python = findPython()
+      const script = path.join(root, 'backend', 'api', 'local_server.py')
 
-      console.log('[GuardianTwin] Starting backend...')
-      backendProcess = spawn(
-        'python',
-        ['backend/api/local_server.py'],
-        {
-          cwd: root,
-          stdio: 'inherit',   // pipe backend logs to same terminal
-          shell: true,
-        }
-      )
+      console.log(`\n[GuardianTwin] Starting backend with: ${python}`)
+      console.log(`[GuardianTwin] Script: ${script}\n`)
 
-      backendProcess.on('error', err => {
-        console.error('[GuardianTwin] Backend failed to start:', err.message)
+      backendProcess = spawn(python, [script], {
+        cwd: root,
+        stdio: 'inherit',
+        shell: false,
+        env: { ...process.env },
       })
 
-      // Kill backend when Vite shuts down
+      backendProcess.on('error', err => {
+        console.error(`[GuardianTwin] Backend failed to start: ${err.message}`)
+        console.error('[GuardianTwin] Run manually: python backend/api/local_server.py')
+      })
+
+      backendProcess.on('exit', code => {
+        if (code !== 0 && code !== null) {
+          console.error(`[GuardianTwin] Backend exited with code ${code}`)
+        }
+      })
+
       const cleanup = () => {
-        if (backendProcess) {
-          console.log('[GuardianTwin] Stopping backend...')
-          backendProcess.kill()
+        if (backendProcess && !backendProcess.killed) {
+          console.log('\n[GuardianTwin] Stopping backend...')
+          backendProcess.kill('SIGTERM')
         }
       }
       process.on('exit', cleanup)
@@ -43,5 +69,24 @@ function backendPlugin() {
 
 export default defineConfig({
   plugins: [react(), backendPlugin()],
-  server: { port: 5173 },
+  server: {
+    port: 5173,
+    proxy: {
+      '/query':           'http://localhost:8000',
+      '/scenario':        'http://localhost:8000',
+      '/missions':        'http://localhost:8000',
+      '/trigger_mission': 'http://localhost:8000',
+      '/mission_status':  'http://localhost:8000',
+      '/start_simulation':'http://localhost:8000',
+      '/reset':           'http://localhost:8000',
+      '/state':           'http://localhost:8000',
+      '/health':          'http://localhost:8000',
+      '/logs':            { target: 'http://localhost:8000', changeOrigin: true },
+      '/ws': {
+        target: 'ws://localhost:8000',
+        ws: true,
+        changeOrigin: true,
+      },
+    },
+  },
 })
