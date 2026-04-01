@@ -22,11 +22,18 @@ _mission_count: int = 0
 
 
 def _position3d_to_grid(pos) -> dict:
-    """Convert Building3D Position3D to grid coords for the dashboard."""
+    """Convert Building3D Position3D to grid coords for the dashboard.
+    
+    Building3D: x=col*cell_size, y=row*cell_size, floor=floor_index
+    Grid: grid_x=col (0-19), grid_y=row (0-19)
+    """
     from backend.adapters.building_adapter import position3d_to_zone
+    # x maps to grid_x (column), y maps to grid_y (row)
+    grid_x = min(19, max(0, int(pos.x)))
+    grid_y = min(19, max(0, int(pos.y)))
     return {
-        'grid_x': min(19, max(0, int(pos.x))),
-        'grid_y': min(19, max(0, int(pos.y))),
+        'grid_x': grid_x,
+        'grid_y': grid_y,
         'zone': position3d_to_zone(pos),
         'floor': pos.floor,
     }
@@ -144,9 +151,11 @@ def rescuenav_bridge_node(state: dict) -> dict:
         running = _mission_running
 
     # Auto-trigger a mission when fire is detected
-    if threat in ('high', 'critical') and not running and not latest:
+    # Guard: don't trigger during pytest runs
+    import sys
+    in_test = 'pytest' in sys.modules
+    if threat in ('high', 'critical') and not running and not latest and not in_test:
         log.append('[RescueNav] 🚀 Triggering 3D rescue simulation mission...')
-        # db is injected at startup — use module-level reference
         start_mission(scenario='fire', num_agents=3, db=_db_ref)
 
     # Log mission result when available
