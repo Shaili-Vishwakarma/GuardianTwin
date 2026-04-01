@@ -40,13 +40,13 @@ export default function LogsPanel() {
     if (!open) return
 
     // Fetch history first
-    fetch('http://localhost:8000/logs/history')
+    fetch('/logs/history')
       .then(r => r.json())
       .then(d => setLines(d.lines || []))
       .catch(() => {})
 
     // Then stream new lines via SSE
-    const es = new EventSource('http://localhost:8000/logs/stream')
+    const es = new EventSource('/logs/stream')
     esRef.current = es
     es.onmessage = e => {
       setLines(prev => {
