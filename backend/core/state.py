@@ -79,6 +79,16 @@ class EmergencyState(TypedDict):
     fire_brigade: list         # fire brigade unit states
     extinguished_zones: list   # zones confirmed fully extinguished
 
+    # RescueNav 3D simulation bridge
+    mission_history: dict      # latest completed NeMo mission result
+    mission_stats: dict        # aggregated stats from atlas_learning_db
+    nemo_agent_paths: list     # agent paths from last 3D mission
+
+    # Scenario
+    scenario: str              # 'fire' or 'attacker'
+    attacker_position: dict    # {grid_x, grid_y, zone, floor} when scenario=attacker
+    attacker_threat_zones: list  # zones currently threatened by attacker
+
 
 def initial_state() -> EmergencyState:
     return EmergencyState(
@@ -108,4 +118,10 @@ def initial_state() -> EmergencyState:
         brigade_zones=[],
         fire_brigade=[],
         extinguished_zones=[],
+        mission_history={},
+        mission_stats={},
+        nemo_agent_paths=[],
+        scenario='fire',
+        attacker_position={},
+        attacker_threat_zones=[],
     )
