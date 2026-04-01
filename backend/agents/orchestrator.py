@@ -52,11 +52,35 @@ def orchestrator_node(state: dict) -> dict:
 
     readings = state.get('latest_sensor_payload', {}).get('readings', [])
     log = list(state.get('agent_action_log', []))
+    scenario = state.get('scenario', 'fire')
 
     if not readings:
         return {'agent_action_log': log + ['[Orchestrator] No sensor data']}
 
-    # Check if all fire zones are extinguished — override sensors
+    # ── ATTACKER SCENARIO ─────────────────────────────────────────────────────
+    if scenario == 'attacker':
+        # Attacker is always present once simulation starts
+        # Read position from previous cycle (set by attackersense last cycle)
+        attacker_pos = state.get('attacker_position', {})
+        danger = attacker_pos.get('danger_level', 0.9) if attacker_pos else 0.9
+
+        # Default to high threat — attacker is always active
+        if danger >= 0.8:
+            threat = 'high'
+        elif danger >= 0.5:
+            threat = 'medium'
+        elif danger > 0:
+            threat = 'low'
+        else:
+            threat = 'high'  # default — attacker always present
+
+        zone = attacker_pos.get('zone', 'F2-B') if attacker_pos else 'F2-B'
+        floor = attacker_pos.get('floor', 2) if attacker_pos else 2
+        log.append(f'[Orchestrator] 🔴 INTRUDER THREAT={threat.upper()} — zone {zone} floor {floor}')
+        log.append(f'[Orchestrator] Threat={threat}')
+        return {'threat_level': threat, 'agent_action_log': log, 'messages': []}
+
+    # ── FIRE SCENARIO ─────────────────────────────────────────────────────────
     extinguished = set(state.get('extinguished_zones', []))
     heatmap      = state.get('fire_heatmap', {})
     active_fire_zones = [
@@ -68,13 +92,10 @@ def orchestrator_node(state: dict) -> dict:
     )
 
     if not active_fire_zones and extinguished:
-        # All fires out — incident over
         threat = 'none'
         log.append('[Orchestrator] ✅ All fires extinguished — threat cleared')
         if all_rescued:
             log.append('[Orchestrator] ✅ All occupants accounted for — ALL CLEAR')
-        # Do NOT return early — let the full pipeline run so rescuesim can
-        # finish evacuating any at-risk people even after fire is out
         return {
             'threat_level': threat,
             'fire_origin_zone': None if all_rescued else state.get('fire_origin_zone'),
@@ -82,10 +103,8 @@ def orchestrator_node(state: dict) -> dict:
             'messages': [],
         }
 
-    # Rule-based is always the baseline
     threat = rule_based_threat(readings)
 
-    # Log early warning signals even at low threat
     max_smoke = max((r.get('smoke_ppm', 0) for r in readings), default=0)
     max_temp  = max((r.get('temp_c', 0)   for r in readings), default=0)
     hot_zone  = next((r['zone'] for r in readings if r.get('smoke_ppm', 0) == max_smoke), None)
@@ -96,7 +115,6 @@ def orchestrator_node(state: dict) -> dict:
     elif threat == 'medium':
         log.append(f'[Orchestrator] 🚨 Pre-fire conditions: {hot_zone} — preparing dispatch')
 
-    # Optionally enrich with LLM (respects cooldown)
     resp = None
     now = time.time()
     if _llm_enabled and llm is not None and (now - _last_llm_call) >= _LLM_COOLDOWN:
@@ -118,7 +136,6 @@ def orchestrator_node(state: dict) -> dict:
         log.append(f'[Orchestrator] Rule-based: {threat}')
 
     log.append(f'[Orchestrator] Threat={threat}')
-
     return {
         'threat_level': threat,
         'agent_action_log': log,
