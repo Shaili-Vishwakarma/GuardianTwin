@@ -66,6 +66,15 @@ def firebrigade_node(state: dict) -> dict:
     if not _initialized:
         _init_units()
 
+    # Fire brigade only operates in fire scenario — return empty in attacker mode
+    if state.get('scenario') == 'attacker':
+        return {
+            'fire_brigade': [],   # hide completely, not just standby
+            'brigade_zones': [],
+            'extinguished_zones': [],
+            'agent_action_log': list(state.get('agent_action_log', [])),
+        }
+
     heatmap = state.get('fire_heatmap', {})
     threat  = state.get('threat_level', 'none')
     log     = list(state.get('agent_action_log', []))
